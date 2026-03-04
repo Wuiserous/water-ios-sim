@@ -1,363 +1,365 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Real Fluid Physics</title>
-<style>
-    body {
-        margin: 0;
-        background-color: #000;
-        overflow: hidden;
-        touch-action: none;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>60FPS Realistic Water</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            overflow: hidden;
+            touch-action: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: white;
+        }
 
-    #container {
-        position: relative;
-        width: 100vw;
-        height: 100vh;
-    }
+        #glass-container {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background: radial-gradient(circle at 50% 50%, #1a1a1a 0%, #000000 100%);
+        }
 
-    canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-        /* This SVG filter creates the "Liquid" look by combining particles */
-        filter: url('#goo'); 
-    }
+        /* Simulates the look of looking inside a phone/glass cup */
+        #glass-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            box-shadow: inset 0 0 40px rgba(255,255,255,0.1);
+            border: 2px solid rgba(255,255,255,0.05);
+            pointer-events: none;
+            z-index: 5;
+        }
 
-    /* Invisible iOS Haptic Trigger */
-    .haptic-switch {
-        position: absolute;
-        opacity: 0;
-        pointer-events: none;
-    }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
 
-    #ui {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        pointer-events: none;
-        z-index: 10;
-    }
+        #ui {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(10px);
+            transition: opacity 0.3s;
+        }
 
-    button {
-        pointer-events: auto;
-        padding: 20px 40px;
-        font-size: 18px;
-        border-radius: 50px;
-        border: none;
-        background: rgba(255, 255, 255, 0.2);
-        color: white;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        border: 1px solid rgba(255,255,255,0.3);
-        transition: transform 0.2s;
-        cursor: pointer;
-    }
-    button:active { transform: scale(0.95); background: rgba(255,255,255,0.4); }
-
-    #debug {
-        position: absolute;
-        bottom: 20px;
-        width: 100%;
-        text-align: center;
-        color: rgba(255,255,255,0.3);
-        font-size: 12px;
-    }
-</style>
+        button {
+            padding: 20px 40px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 50px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, #007aff, #005bb5);
+            color: white;
+            box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4);
+            cursor: pointer;
+        }
+        button:active { transform: scale(0.95); }
+    </style>
 </head>
 <body>
 
-<!-- SVG Filter for Metaballs (Makes particles stick together) -->
-<svg style="position: absolute; width:0; height:0;">
-    <defs>
-        <filter id="goo">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
-            <feColorMatrix in="blur" mode="matrix" values="
-                1 0 0 0 0  
-                0 1 0 0 0  
-                0 0 1 0 0  
-                0 0 0 20 -10" result="goo" />
-            <feComposite in="SourceGraphic" in2="goo" operator="atop"/>
-        </filter>
-    </defs>
-</svg>
-
-<!-- iOS Haptic Hack: Invisible Switch -->
-<label class="haptic-switch">
-    <input type="checkbox" id="ios-haptic-trigger" switch>
-</label>
-
-<div id="container">
+<div id="glass-container">
     <canvas id="sim"></canvas>
-    <div id="ui">
-        <button id="btn-start">Fill Cup</button>
-    </div>
-    <div id="debug">Tilt your phone to pour</div>
+    <div id="glass-overlay"></div>
 </div>
+
+<div id="ui">
+    <button id="btn-start">Fill Cup with Water</button>
+</div>
+
+<!-- Import web-haptics dynamically -->
+<script type="module">
+    // Load the NPM package gracefully via CDN
+    let hapticLib = null;
+    import('https://unpkg.com/web-haptics').then(module => {
+        hapticLib = module.default || module.Haptics || module;
+        console.log("web-haptics loaded successfully");
+    }).catch(e => {
+        console.warn("Failed to load web-haptics, falling back to native navigator.vibrate");
+    });
+
+    let lastHaptic = 0;
+    window.triggerHaptic = function(force) {
+        const now = Date.now();
+        if (now - lastHaptic < 80) return; // Prevent buzzing (debounce)
+        lastHaptic = now;
+
+        let intensity = force > 300 ? 'heavy' : force > 150 ? 'medium' : 'light';
+
+        if (hapticLib && typeof hapticLib.impact === 'function') {
+            hapticLib.impact(intensity);
+        } else if (navigator.vibrate) {
+            navigator.vibrate(intensity === 'heavy' ? 20 : intensity === 'medium' ? 10 : 5);
+        }
+    };
+</script>
 
 <script>
 /**
- * CONFIGURATION
+ * 60FPS VERLET FLUID PHYSICS ENGINE
  */
-const CONFIG = {
-    particleCount: 250,      // Number of water drops (Lower if slow)
-    particleSize: 18,        // Visual size
-    gravityScale: 0.15,      // How heavy the water feels
-    damping: 0.96,           // Friction (0.99 = slippery, 0.90 = thick oil)
-    spacing: 12,             // Natural distance between drops
-    stiffness: 0.08,         // Pressure force (How hard they push apart)
-    hapticThreshold: 8.0,    // Speed required to trigger haptic
-    viscosity: 0.002         // Fluid thickness
-};
-
-// --- Setup ---
 const canvas = document.getElementById('sim');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { alpha: false }); // Optimize rendering
+const ui = document.getElementById('ui');
 const btn = document.getElementById('btn-start');
-const hapticSwitch = document.getElementById('ios-haptic-trigger');
+
+// Fluid Config
+const PARTICLES = 350;     // Perfect amount for an iPhone screen volume
+const R = 18;              // Physics interaction radius
+const DRAW_R = 14;         // Visual size (slightly smaller to overlap cleanly)
+const R_SQ = R * R;
+const R_COHESION = R_SQ * 2.25; // How far water pulls on itself (Surface tension)
 
 let width, height;
 let particles = [];
+let grid =[];
+let cols, rows;
+let cellSize = R * 1.5;
+
+// Gravity Variables
+let targetGravityX = 0;
+let targetGravityY = 0.5; // Default resting gravity (down)
 let gravityX = 0;
-let gravityY = CONFIG.gravityScale * 10; // Default gravity down
+let gravityY = 0.5;
 
-// Spatial Hash Grid (Optimizes collision detection)
-let grid = {};
-const gridSize = CONFIG.particleSize * 2;
-
-// --- Particle Class ---
 class Particle {
-    constructor(x, y) {
+    constructor(id, x, y) {
+        this.id = id;
         this.x = x;
         this.y = y;
-        this.vx = (Math.random() - 0.5) * 2;
-        this.vy = (Math.random() - 0.5) * 2;
-        this.color = `hsl(${200 + Math.random()*20}, 90%, 60%)`;
-    }
-
-    update() {
-        // Apply Gravity
-        this.vx += gravityX;
-        this.vy += gravityY;
-
-        // Apply Velocity
-        this.x += this.vx;
-        this.y += this.vy;
-
-        // Wall Collisions
-        const radius = CONFIG.particleSize / 2;
-        let hit = false;
-        let impactSpeed = 0;
-
-        // Floor
-        if (this.y > height - radius) {
-            this.y = height - radius;
-            this.vy *= -0.5; // Bounce damping
-            this.vx *= 0.9;  // Floor friction
-            hit = true; impactSpeed = Math.abs(this.vy);
-        }
-        // Ceiling
-        else if (this.y < radius) {
-            this.y = radius;
-            this.vy *= -0.5;
-            hit = true;
-        }
-
-        // Walls
-        if (this.x > width - radius) {
-            this.x = width - radius;
-            this.vx *= -0.5;
-            hit = true; impactSpeed = Math.abs(this.vx);
-        }
-        else if (this.x < radius) {
-            this.x = radius;
-            this.vx *= -0.5;
-            hit = true; impactSpeed = Math.abs(this.vx);
-        }
-
-        // Haptic Trigger
-        if (hit && impactSpeed > CONFIG.hapticThreshold) {
-            triggerHaptic(impactSpeed);
-        }
-    }
-
-    draw() {
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, CONFIG.particleSize, 0, Math.PI * 2);
-        ctx.fillStyle = "#00aaff"; // Blue color, filter handles the rest
-        ctx.fill();
+        this.oldX = x;
+        this.oldY = y;
+        this.vx = 0;
+        this.vy = 0;
     }
 }
 
-// --- Physics Solver (SPH - Smoothed Particle Hydrodynamics Simplified) ---
-function solveFluid() {
-    // 1. Spatial Hashing (Put particles in grid cells)
-    grid = {};
-    for (let p of particles) {
-        // Wall friction damping
-        p.vx *= CONFIG.damping;
-        p.vy *= CONFIG.damping;
+function init() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+    
+    cols = Math.ceil(width / cellSize);
+    rows = Math.ceil(height / cellSize);
+    grid = new Array(cols * rows);
+    for(let i = 0; i < grid.length; i++) grid[i] = [];
 
-        let key = Math.floor(p.x / gridSize) + "," + Math.floor(p.y / gridSize);
-        if (!grid[key]) grid[key] = [];
-        grid[key].push(p);
+    particles =[];
+    const spawnCols = 15;
+    const startX = width / 2 - (spawnCols * R);
+    const startY = height - (Math.ceil(PARTICLES / spawnCols) * R * 2) - 50;
+
+    for (let i = 0; i < PARTICLES; i++) {
+        let x = startX + (i % spawnCols) * (R * 1.5) + (Math.random() * 2);
+        let y = startY + Math.floor(i / spawnCols) * (R * 1.5);
+        particles.push(new Particle(i, x, y));
+    }
+}
+
+window.addEventListener('resize', () => { if(particles.length > 0) init(); });
+
+// --- Physics Step ---
+function updatePhysics() {
+    // 1. Smooth Gravity Mapping
+    gravityX += (targetGravityX - gravityX) * 0.1;
+    gravityY += (targetGravityY - gravityY) * 0.1;
+
+    // 2. Integration (Verlet) & Bounds
+    for (let i = 0; i < PARTICLES; i++) {
+        let p = particles[i];
+        
+        // Add gravity to velocity
+        p.vx += gravityX;
+        p.vy += gravityY;
+        
+        // Predict next position
+        let nx = p.x + p.vx;
+        let ny = p.y + p.vy;
+        
+        p.oldX = p.x;
+        p.oldY = p.y;
+        p.x = nx;
+        p.y = ny;
+        
+        // Fast wall bounds
+        if (p.x < R) p.x = R;
+        if (p.x > width - R) p.x = width - R;
+        if (p.y < R) p.y = R;
+        if (p.y > height - R) p.y = height - R;
     }
 
-    // 2. Resolve Particle Interactions
-    for (let p of particles) {
-        let pKeyX = Math.floor(p.x / gridSize);
-        let pKeyY = Math.floor(p.y / gridSize);
+    // 3. Clear and Populate Spatial Hash Grid
+    for(let i = 0; i < grid.length; i++) grid[i].length = 0;
+    
+    for(let i = 0; i < PARTICLES; i++) {
+        let p = particles[i];
+        let cx = Math.floor(p.x / cellSize);
+        let cy = Math.floor(p.y / cellSize);
+        if (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
+            grid[cx + cy * cols].push(p);
+        }
+    }
 
-        // Check neighbor cells (3x3 grid)
-        for (let i = -1; i <= 1; i++) {
-            for (let j = -1; j <= 1; j++) {
-                let key = (pKeyX + i) + "," + (pKeyY + j);
-                let neighbors = grid[key];
-                
-                if (neighbors) {
-                    for (let n of neighbors) {
-                        if (p === n) continue; // Don't check self
+    // 4. Solve Viscoelastic Constraints (Runs 2x for stiffness)
+    for (let iter = 0; iter < 2; iter++) {
+        for (let i = 0; i < PARTICLES; i++) {
+            let p = particles[i];
+            let cx = Math.floor(p.x / cellSize);
+            let cy = Math.floor(p.y / cellSize);
 
-                        let dx = p.x - n.x;
-                        let dy = p.y - n.y;
-                        let distSq = dx*dx + dy*dy;
-                        let minDist = CONFIG.spacing;
-
-                        // If too close, push away (Pressure)
-                        if (distSq < minDist * minDist && distSq > 0) {
-                            let dist = Math.sqrt(distSq);
-                            let force = (minDist - dist) / minDist; // Normalized force 0 to 1
-                            
-                            // Force Vector
-                            let fx = (dx / dist) * force * CONFIG.stiffness;
-                            let fy = (dy / dist) * force * CONFIG.stiffness;
-
-                            // Apply forces (Action-Reaction)
-                            p.vx += fx;
-                            p.vy += fy;
-                            n.vx -= fx;
-                            n.vy -= fy;
+            // Check neighbor cells
+            for (let nx = cx - 1; nx <= cx + 1; nx++) {
+                for (let ny = cy - 1; ny <= cy + 1; ny++) {
+                    if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
+                        let cell = grid[nx + ny * cols];
+                        for (let j = 0; j < cell.length; j++) {
+                            let p2 = cell[j];
+                            if (p.id < p2.id) { // Avoid double-checking pairs
+                                let dx = p2.x - p.x;
+                                let dy = p2.y - p.y;
+                                let distSq = dx*dx + dy*dy;
+                                
+                                // Are they close enough to interact?
+                                if (distSq < R_COHESION) {
+                                    let dist = Math.sqrt(distSq);
+                                    if (dist === 0) continue;
+                                    let dirX = dx / dist;
+                                    let dirY = dy / dist;
+                                    
+                                    if (dist < R) {
+                                        // Incompressible (Push Apart)
+                                        let overlap = (R - dist) * 0.5;
+                                        p.x -= dirX * overlap; p.y -= dirY * overlap;
+                                        p2.x += dirX * overlap; p2.y += dirY * overlap;
+                                    } else {
+                                        // Surface Tension / Cohesion (Pull together)
+                                        let pull = (dist - R) * 0.025; 
+                                        p.x += dirX * pull; p.y += dirY * pull;
+                                        p2.x -= dirX * pull; p2.y -= dirY * pull;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     }
-}
 
-// --- Haptics Engine ---
-let lastHaptic = 0;
-function triggerHaptic(intensity) {
-    const now = Date.now();
-    if (now - lastHaptic < 80) return; // Debounce (too many vibrations feels like a buzz)
-    lastHaptic = now;
+    // 5. Finalize Velocities and Detect Splashes (Haptics)
+    let frameImpact = 0;
+    for (let i = 0; i < PARTICLES; i++) {
+        let p = particles[i];
+        
+        let hit = false;
+        let bounce = 0.2; // Dead bounce, water sticks to walls
 
-    // Method 1: Standard Android API
-    if (navigator.vibrate) {
-        navigator.vibrate(Math.min(20, intensity * 2));
+        if (p.x <= R) { p.x = R; p.oldX = p.x + p.vx * bounce; hit = true; }
+        if (p.x >= width - R) { p.x = width - R; p.oldX = p.x + p.vx * bounce; hit = true; }
+        if (p.y <= R) { p.y = R; p.oldY = p.y + p.vy * bounce; hit = true; }
+        if (p.y >= height - R) { p.y = height - R; p.oldY = p.y + p.vy * bounce; hit = true; }
+        
+        // Derive velocity from updated positions
+        p.vx = (p.x - p.oldX) * 0.99; // 0.99 preserves momentum (slippery)
+        p.vy = (p.y - p.oldY) * 0.99;
+        
+        // Accumulate impact force if hitting walls
+        if (hit) frameImpact += Math.abs(p.vx) + Math.abs(p.vy);
     }
 
-    // Method 2: iOS Switch Hack (Simulates a system click)
-    // Toggling a switch programmatically on iOS 17+ sometimes triggers system haptic
-    try {
-        hapticSwitch.checked = !hapticSwitch.checked;
-    } catch(e){}
+    // If total mass of water hitting the wall is large enough, trigger vibration
+    if (frameImpact > 100 && window.triggerHaptic) {
+        window.triggerHaptic(frameImpact);
+    }
 }
 
-// --- Main Loop ---
-function loop() {
-    ctx.clearRect(0, 0, width, height);
+// --- Rendering Step ---
+function draw() {
+    ctx.fillStyle = "#111"; // Background
+    ctx.fillRect(0, 0, width, height);
 
-    // Update Physics
-    solveFluid();
-
-    for (let p of particles) {
-        p.update();
-        p.draw();
+    // Draw Water
+    ctx.fillStyle = "#0088ff";
+    ctx.beginPath();
+    for (let i = 0; i < PARTICLES; i++) {
+        let p = particles[i];
+        // move to radius edge so paths don't connect across the screen
+        ctx.moveTo(p.x + DRAW_R, p.y); 
+        ctx.arc(p.x, p.y, DRAW_R, 0, Math.PI * 2);
     }
+    ctx.fill();
 
+    // Adding this faint stroke creates a cohesive "caustics/bubble" texture 
+    // when particles overlap
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+}
+
+// Fixed timestep loop for perfect consistency on 60hz & 120hz displays
+let lastTime = 0;
+let accumulator = 0;
+const TIME_STEP = 1000 / 60;
+
+function loop(time) {
+    let dt = time - lastTime;
+    lastTime = time;
+    if (dt > 100) dt = 100; // prevent spiral of death if tab is backgrounded
+
+    accumulator += dt;
+    while (accumulator >= TIME_STEP) {
+        updatePhysics();
+        accumulator -= TIME_STEP;
+    }
+    
+    draw();
     requestAnimationFrame(loop);
 }
 
-// --- Initialization ---
-function init() {
-    resize();
-    // Spawn particles in the middle
-    particles = [];
-    const cols = 15;
-    const startX = width/2 - (cols * CONFIG.spacing)/2;
-    const startY = height/2;
-    
-    for (let i = 0; i < CONFIG.particleCount; i++) {
-        let col = i % cols;
-        let row = Math.floor(i / cols);
-        particles.push(new Particle(startX + col * CONFIG.spacing, startY + row * CONFIG.spacing));
-    }
-}
-
-function resize() {
-    width = canvas.width = window.innerWidth;
-    height = canvas.height = window.innerHeight;
-}
-window.addEventListener('resize', resize);
-
-// --- Inputs & Permissions ---
+// --- Sensors & Startup ---
 btn.onclick = async () => {
-    // Attempt to unlock iOS permission
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         try {
-            const response = await DeviceMotionEvent.requestPermission();
-            if (response === 'granted') {
-                startSensors();
+            const permissionState = await DeviceMotionEvent.requestPermission();
+            if (permissionState === 'granted') {
+                startSim();
             } else {
-                alert("Permission needed for physics.");
+                alert("Motion permission denied. It will not work.");
             }
         } catch (e) {
-            console.error(e);
+            alert("Error: " + e);
         }
     } else {
-        startSensors();
+        startSim();
     }
 };
 
-function startSensors() {
-    btn.style.display = "none";
+function startSim() {
+    ui.style.opacity = "0";
+    setTimeout(() => ui.style.display = "none", 300);
+    
     init();
-    loop();
+    requestAnimationFrame((t) => { lastTime = t; loop(t); });
 
-    window.addEventListener('devicemotion', (e) => {
-        // Read gravity from accelerometer (including gravity vector)
+    window.addEventListener("devicemotion", (e) => {
         let acc = e.accelerationIncludingGravity;
         if (acc) {
-            // Map sensor to screen coordinates
-            // iOS and Android axes might differ, but this standard mapping usually works for portrait
-            // Invert X because tilting left (negative X) should push water right? 
-            // Actually, tilting phone Left -> Gravity points Left. Water goes Left.
-            gravityX = -acc.x * CONFIG.gravityScale;
-            gravityY = acc.y * CONFIG.gravityScale;
+            // iOS W3C mapping:
+            // Tilting Right (right edge down): acc.x is positive -> Water falls Right (+X)
+            // Upright (bottom edge down): acc.y is negative -> Water falls Down (+Y)
+            const gScale = 0.15; // Tuning factor for weight
+            targetGravityX = acc.x * gScale; 
+            targetGravityY = -acc.y * gScale; 
         }
     });
 }
-
-// Fallback for desktop testing (Mouse follows)
-window.addEventListener('mousemove', (e) => {
-    if(!window.DeviceMotionEvent) {
-        let dx = (e.clientX - width/2) / width;
-        let dy = (e.clientY - height/2) / height;
-        gravityX = dx * 1.5;
-        gravityY = dy * 1.5;
-    }
-});
-
 </script>
 </body>
 </html>

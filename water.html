@@ -1,229 +1,269 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Realistic Gyro Water</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Realistic Physics Water</title>
 
 <style>
 body {
     margin: 0;
-    background: #111;
+    background: #000;
+    overflow: hidden;
+    touch-action: none;
     display: flex;
     justify-content: center;
     align-items: center;
     height: 100vh;
-    font-family: sans-serif;
-    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 #container {
     position: relative;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-    border-radius: 20px;
+    width: 100vw;
+    height: 100vh;
+    background: #111;
 }
 
 canvas {
-    background: linear-gradient(to bottom, #1b1b1b 0%, #0d0d0d 100%);
-    border-radius: 20px;
     display: block;
-    border: 2px solid #333;
+    width: 100%;
+    height: 100%;
+}
+
+/* UI Overlay */
+#ui-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+    z-index: 10;
 }
 
 button {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    padding: 16px 24px;
-    font-size: 16px;
+    pointer-events: auto;
+    padding: 18px 32px;
+    font-size: 18px;
+    font-weight: 600;
     border: none;
-    border-radius: 12px;
-    background: #4da6ff;
+    border-radius: 30px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
     color: white;
+    border: 1px solid rgba(255,255,255,0.2);
     cursor: pointer;
-    font-weight: bold;
-    box-shadow: 0 4px 12px rgba(77, 166, 255, 0.4);
-    transition: transform 0.1s;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    transition: transform 0.2s, background 0.2s;
 }
 
 button:active {
-    transform: translate(-50%, -50%) scale(0.95);
+    transform: scale(0.95);
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.instructions {
+    position: absolute;
+    bottom: 40px;
+    color: rgba(255,255,255,0.4);
+    font-size: 14px;
+    text-align: center;
+    width: 100%;
 }
 </style>
 </head>
 <body>
 
 <div id="container">
-    <canvas id="c" width="350" height="500"></canvas>
-    <button id="start">Enable Water</button>
+    <canvas id="c"></canvas>
+    
+    <div id="ui-layer">
+        <button id="start">Tap to Fill Cup</button>
+        <div class="instructions" id="hint" style="display:none">Tilt and Shake your device</div>
+    </div>
 </div>
 
 <script>
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
-
-const W = canvas.width;
-const H = canvas.height;
-
-// --- Physics Configuration ---
-const POINTS = 100;           // More points for smoother waves
-const SPRING_K = 0.0025;      // Low value = loose water (sloshy). High = stiff jello.
-const DAMPING = 0.03;         // Friction. Lower = waves last longer.
-const SPREAD = 0.2;           // How fast waves travel laterally
-const INERTIA_SCALE = 15.0;   // How much phone movement "throws" the water
-
-// --- State Variables ---
-let waterH = [];      // Height of water columns
-let waterV = [];      // Velocity of water columns
-let baseLevel = H * 0.5;
-
-// Initialize water
-for (let i = 0; i < POINTS; i++) {
-    waterH[i] = baseLevel;
-    waterV[i] = 0;
-}
-
-let currentTilt = 0;
-let smoothedTilt = 0;
-let prevTilt = 0;
-
-// Button Logic
-const btn = document.getElementById("start");
-btn.onclick = async () => {
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === "function") {
-        try {
-            let p = await DeviceOrientationEvent.requestPermission();
-            if (p === "granted") {
-                window.addEventListener("deviceorientation", handleOrientation);
-                btn.style.display = "none";
-            } else {
-                alert("Permission denied. Cant simulate physics.");
-            }
-        } catch (e) {
-            alert(e);
-        }
-    } else {
-        // Non-iOS or older devices
-        window.addEventListener("deviceorientation", handleOrientation);
-        btn.style.display = "none";
-    }
+// --- Configuration ---
+const CONFIG = {
+    pointCount: 80,         // Detail of the wave
+    springK: 0.05,          // Tension (Spring stiffness)
+    damping: 0.05,          // Friction (0 = never stops, 0.2 = honey)
+    spread: 0.2,            // How fast waves spread sideways
+    viscosity: 8,           // Higher = More "liquid" feel, less jitter
+    sensoryMult: 0.5,       // Sensitivity to movement
+    baseLevelRatio: 0.5,    // Cup fill level (50%)
+    hapticThreshold: 3.0    // Velocity required to trigger impact haptic
 };
 
-function handleOrientation(e) {
-    // Gamma is usually left/right tilt (-90 to 90)
-    // We clamp it slightly to prevent extreme edge cases
-    let g = e.gamma || 0;
-    if(g > 90) g = 90;
-    if(g < -90) g = -90;
-    
-    // Smooth the input slightly to reduce sensor jitter
-    currentTilt = g;
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d", { alpha: false }); // Optimization
+
+let width, height;
+let waterHeight = [];
+let waterVelocity = [];
+let targetHeight = [];
+
+// Sensor Data
+let accX = 0;
+let accY = 0;
+let smoothAccX = 0;
+let smoothAccY = 0;
+
+// Resize Handler
+function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+    initPhysics();
+}
+window.addEventListener('resize', resize);
+
+function initPhysics() {
+    for (let i = 0; i < CONFIG.pointCount; i++) {
+        waterHeight[i] = height * CONFIG.baseLevelRatio;
+        targetHeight[i] = height * CONFIG.baseLevelRatio;
+        waterVelocity[i] = 0;
+    }
 }
 
+// --- Haptics Engine ---
+// iOS WebKit Haptics are very limited. 
+// We use navigator.vibrate pattern. On strict iOS, this might be ignored
+// unless triggered by tap, but this is the standard Web API way.
+let lastHapticTime = 0;
+
+function triggerHaptic(intensity) {
+    const now = Date.now();
+    if (now - lastHapticTime < 100) return; // Debounce (don't vibrate too often)
+
+    if (navigator.vibrate) {
+        // Impact duration depends on intensity
+        let duration = Math.min(20, Math.max(5, intensity * 2));
+        navigator.vibrate(duration); 
+        lastHapticTime = now;
+    }
+}
+
+// --- The Physics Loop ---
 function physics() {
-    // 1. Calculate Tilt Dynamics
-    // We use Linear Interpolation (Lerp) to smooth the sensor data
-    smoothedTilt += (currentTilt - smoothedTilt) * 0.1;
+    // 1. Smooth the sensor data (Low pass filter)
+    // This removes jitter but keeps the "weight" of the movement
+    smoothAccX += (accX - smoothAccX) * 0.1;
+    smoothAccY += (accY - smoothAccY) * 0.1;
+
+    // 2. Calculate the 'Angle of Gravity'
+    // Math.atan2 gives us the angle of the force vector
+    // We clamp it so the water doesn't go fully vertical and break the sim
+    let angle = Math.atan2(smoothAccX, smoothAccY); 
     
-    // Calculate the speed of rotation (Angular Velocity)
-    // This is crucial: moving the phone quickly creates momentum
-    let tiltDelta = smoothedTilt - prevTilt;
-    prevTilt = smoothedTilt;
+    // 3. Calculate Target Heights based on Angle
+    // This creates the flat plane perpendicular to gravity
+    let slope = Math.tan(angle);
+    // Limit slope to prevent infinity
+    slope = Math.max(-10, Math.min(10, slope));
 
-    // Convert angle to a slope factor
-    // tan() gives physically accurate slope for a given angle
-    let slope = Math.tan(smoothedTilt * Math.PI / 180);
+    let totalDiff = 0;
 
-    // 2. Apply Forces to each point
-    for (let i = 0; i < POINTS; i++) {
-        // --- A. Target Height Calculation (Gravity) ---
-        // If the cup is tilted, water wants to form a line perpendicular to gravity.
-        // We calculate that ideal line relative to the center of the screen.
-        let distanceFromCenter = (i - POINTS / 2) * (W / POINTS);
-        let targetHeight = baseLevel + (distanceFromCenter * slope);
-
-        // --- B. Spring Force (Gravity Pull) ---
-        // Pull the water towards that ideal line, but with a spring constant (k).
-        let extension = waterH[i] - targetHeight;
-        let force = -SPRING_K * extension;
-
-        // --- C. Inertia (The "Throw" Effect) ---
-        // If the phone rotates quickly, add velocity to the water.
-        // Tilting right throws water to the left (relative to screen coords) and vice versa.
-        // We scale this by distance from center to simulate centrifugal-like effects.
-        let inertiaForce = tiltDelta * INERTIA_SCALE * (i - POINTS/2) / POINTS;
+    for (let i = 0; i < CONFIG.pointCount; i++) {
+        // Calculate where the surface SHOULD be based on gravity
+        let deviation = (i - CONFIG.pointCount / 2) * (width / CONFIG.pointCount);
+        let idealH = (height * CONFIG.baseLevelRatio) + (deviation * slope);
         
-        // Apply forces to velocity
-        waterV[i] += force - inertiaForce;
+        targetHeight[i] = idealH;
+
+        // Apply Spring Force (Hooke's Law)
+        // Pull actual water height towards target height
+        let x = targetHeight[i] - waterHeight[i];
+        let acceleration = CONFIG.springK * x; 
         
-        // --- D. Damping (Friction) ---
-        waterV[i] *= (1 - DAMPING);
-        
-        // Update position
-        waterH[i] += waterV[i];
+        // Add momentum from device movement (Inertia)
+        // If we move phone Left, water pushes Right.
+        acceleration -= (accX - smoothAccX) * 5; 
+
+        waterVelocity[i] += acceleration;
+        waterVelocity[i] *= (1 - CONFIG.damping);
+        waterHeight[i] += waterVelocity[i];
     }
 
-    // 3. Wave Propagation (Spread)
-    // This passes energy between neighbors 
-    // We run this multiple times per frame for stability
-    for(let j = 0; j < 4; j++) {
-        for (let i = 0; i < POINTS; i++) {
+    // 4. Fluid Spread (Iterative Solver)
+    // This makes neighbors affect each other (Wave propagation)
+    // Running this multiple times per frame creates "viscosity"
+    for (let j = 0; j < CONFIG.viscosity; j++) {
+        for (let i = 0; i < CONFIG.pointCount; i++) {
             if (i > 0) {
-                // Pull neighbor towards me
-                let leftDelta = waterH[i] - waterH[i - 1];
-                waterV[i - 1] += leftDelta * SPREAD;
-                waterV[i] -= leftDelta * SPREAD; // Newton's 3rd law
+                let leftDelta = CONFIG.spread * (waterHeight[i] - waterHeight[i - 1]);
+                waterVelocity[i - 1] += leftDelta;
+                waterHeight[i - 1] += leftDelta;
+                
+                waterVelocity[i] -= leftDelta;
+                waterHeight[i] -= leftDelta;
             }
-            if (i < POINTS - 1) {
-                let rightDelta = waterH[i] - waterH[i + 1];
-                waterV[i + 1] += rightDelta * SPREAD;
-                waterV[i] -= rightDelta * SPREAD;
+            if (i < CONFIG.pointCount - 1) {
+                let rightDelta = CONFIG.spread * (waterHeight[i] - waterHeight[i + 1]);
+                waterVelocity[i + 1] += rightDelta;
+                waterHeight[i + 1] += rightDelta;
+                
+                waterVelocity[i] -= rightDelta;
+                waterHeight[i] -= rightDelta;
             }
         }
     }
-    
-    // 4. Boundary "Splashing"
-    // If water hits the ceiling or floor, bounce it
-    for(let i=0; i<POINTS; i++){
-        if(waterH[i] > H) { waterH[i] = H; waterV[i] *= -0.5; }
-        if(waterH[i] < 0) { waterH[i] = 0; waterV[i] *= -0.5; }
+
+    // 5. Check Wall Collisions for Haptics
+    // We check the edges of the water. If velocity is high, we hit the wall.
+    let leftImpact = Math.abs(waterVelocity[0]);
+    let rightImpact = Math.abs(waterVelocity[CONFIG.pointCount-1]);
+
+    if (leftImpact > CONFIG.hapticThreshold) triggerHaptic(leftImpact);
+    if (rightImpact > CONFIG.hapticThreshold) triggerHaptic(rightImpact);
+
+    // 6. Hard Clamping (Don't let water fly off screen excessively)
+    for(let i=0; i<CONFIG.pointCount; i++){
+        if(waterHeight[i] < 0) waterHeight[i] = 0;
+        if(waterHeight[i] > height) waterHeight[i] = height;
     }
 }
 
+// --- Rendering ---
 function draw() {
-    ctx.clearRect(0, 0, W, H);
+    // Clear background
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, width, height);
 
-    // Create Gradient for water
-    let grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, "rgba(60, 160, 255, 0.8)"); // Top lighter
-    grad.addColorStop(1, "rgba(20, 80, 200, 0.9)");  // Bottom darker
+    // Prepare Gradient
+    let gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, "rgba(0, 150, 255, 0.9)");
+    gradient.addColorStop(1, "rgba(0, 50, 200, 1)");
 
-    ctx.fillStyle = grad;
+    ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.moveTo(0, H);
+    ctx.moveTo(0, height);
 
-    // Draw the top surface curve
-    for (let i = 0; i < POINTS; i++) {
-        let x = i * (W / (POINTS - 1));
-        let y = waterH[i];
+    // Draw Water Curve
+    for (let i = 0; i < CONFIG.pointCount; i++) {
+        let x = i * (width / (CONFIG.pointCount - 1));
+        let y = waterHeight[i];
         ctx.lineTo(x, y);
     }
 
-    ctx.lineTo(W, H); // Bottom right
-    ctx.lineTo(0, H); // Bottom left
+    ctx.lineTo(width, height);
+    ctx.lineTo(0, height);
     ctx.closePath();
     ctx.fill();
 
-    // Highlight line on top
+    // Draw Surface Highlight (Foam/Reflection)
     ctx.beginPath();
-    for (let i = 0; i < POINTS; i++) {
-        let x = i * (W / (POINTS - 1));
-        let y = waterH[i];
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+    for (let i = 0; i < CONFIG.pointCount; i++) {
+        let x = i * (width / (CONFIG.pointCount - 1));
+        let y = waterHeight[i];
+        if (i===0) ctx.moveTo(x,y);
+        else ctx.lineTo(x,y);
     }
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.lineWidth = 2;
     ctx.stroke();
 }
 
@@ -233,7 +273,51 @@ function loop() {
     requestAnimationFrame(loop);
 }
 
-loop();
+// --- Initializer & Permissions ---
+document.getElementById("start").onclick = async () => {
+    
+    // Handle iOS 13+ Permissions
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try {
+            const permissionState = await DeviceMotionEvent.requestPermission();
+            if (permissionState === 'granted') {
+                startSimulation();
+            } else {
+                alert("Motion permission denied. The physics wont work.");
+            }
+        } catch (e) {
+            alert("Error requesting permission: " + e);
+        }
+    } else {
+        // Android or non-iOS 13+
+        startSimulation();
+    }
+};
+
+function startSimulation() {
+    document.getElementById("start").style.display = "none";
+    document.getElementById("hint").style.display = "block";
+    
+    resize();
+    initPhysics();
+    
+    window.addEventListener("devicemotion", (e) => {
+        // Get acceleration including gravity
+        // This includes Gravity (9.8 m/s) AND User Movement
+        // This allows us to detect "Shakes" and "Static Tilt" simultaneously
+        let acc = e.accelerationIncludingGravity;
+        
+        if (acc) {
+            // iOS usually inverts X/Y compared to Android logic in landscape/portrait
+            // We map it to screen coordinates
+            // Note: This mapping is generally robust for Portrait mode on phones
+            accX = -acc.x * CONFIG.sensoryMult; 
+            accY = acc.y * CONFIG.sensoryMult;
+        }
+    });
+
+    loop();
+}
 
 </script>
 

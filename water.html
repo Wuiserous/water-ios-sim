@@ -1,250 +1,239 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Realistic Gyro Water Simulation</title>
+<title>Realistic Gyro Water</title>
 
 <style>
-    body {
-        margin: 0;
-        background: #111;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        font-family: sans-serif;
-        overflow: hidden;
-    }
+body {
+    margin: 0;
+    background: #111;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: sans-serif;
+    overflow: hidden;
+}
 
-    #container {
-        position: relative;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
-        border-radius: 20px;
-    }
+#container {
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    border-radius: 20px;
+}
 
-    canvas {
-        display: block;
-        background: linear-gradient(to bottom, #2a2a2a, #111);
-        border-radius: 20px;
-        touch-action: none; /* Prevents scrolling when interacting on mobile */
-    }
+canvas {
+    background: linear-gradient(to bottom, #1b1b1b 0%, #0d0d0d 100%);
+    border-radius: 20px;
+    display: block;
+    border: 2px solid #333;
+}
 
-    button {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        padding: 14px 24px;
-        font-size: 16px;
-        font-weight: bold;
-        border: none;
-        border-radius: 12px;
-        background: linear-gradient(135deg, #4da6ff, #0073e6);
-        color: white;
-        cursor: pointer;
-        box-shadow: 0 4px 15px rgba(0, 115, 230, 0.4);
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
+button {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 16px 24px;
+    font-size: 16px;
+    border: none;
+    border-radius: 12px;
+    background: #4da6ff;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 4px 12px rgba(77, 166, 255, 0.4);
+    transition: transform 0.1s;
+}
 
-    button:hover {
-        transform: translate(-50%, -52%);
-        box-shadow: 0 6px 20px rgba(0, 115, 230, 0.6);
-    }
-    
-    #hint {
-        position: absolute;
-        bottom: 20px;
-        width: 100%;
-        text-align: center;
-        color: rgba(255, 255, 255, 0.3);
-        font-size: 14px;
-        pointer-events: none;
-    }
+button:active {
+    transform: translate(-50%, -50%) scale(0.95);
+}
 </style>
 </head>
 <body>
 
 <div id="container">
     <canvas id="c" width="350" height="500"></canvas>
-    <button id="start">Enable Motion</button>
-    <div id="hint">Drag left/right to slosh</div>
+    <button id="start">Enable Water</button>
 </div>
 
 <script>
-    const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d");
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
 
-    const W = canvas.width;
-    const H = canvas.height;
+const W = canvas.width;
+const H = canvas.height;
 
-    const points = 100; // Increased resolution for smoother curves
-    let water = [];
-    let flows = []; // Represents the horizontal movement/momentum of water
-    const baseHeight = H * 0.55;
+// --- Physics Configuration ---
+const POINTS = 100;           // More points for smoother waves
+const SPRING_K = 0.0025;      // Low value = loose water (sloshy). High = stiff jello.
+const DAMPING = 0.03;         // Friction. Lower = waves last longer.
+const SPREAD = 0.2;           // How fast waves travel laterally
+const INERTIA_SCALE = 15.0;   // How much phone movement "throws" the water
 
-    // Initialize arrays
-    for (let i = 0; i < points; i++) {
-        water[i] = baseHeight;
-        flows[i] = 0;
-    }
+// --- State Variables ---
+let waterH = [];      // Height of water columns
+let waterV = [];      // Velocity of water columns
+let baseLevel = H * 0.5;
 
-    let tilt = 0;
-    let targetTilt = 0;
-    let usingDeviceOrientation = false;
+// Initialize water
+for (let i = 0; i < POINTS; i++) {
+    waterH[i] = baseLevel;
+    waterV[i] = 0;
+}
 
-    // --- Interaction & Sensors ---
+let currentTilt = 0;
+let smoothedTilt = 0;
+let prevTilt = 0;
 
-    document.getElementById("start").onclick = async () => {
-        if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-            try {
-                let p = await DeviceOrientationEvent.requestPermission();
-                if (p === "granted") {
-                    window.addEventListener("deviceorientation", handleOrientation);
-                    usingDeviceOrientation = true;
-                }
-            } catch (e) {
-                console.error(e);
+// Button Logic
+const btn = document.getElementById("start");
+btn.onclick = async () => {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === "function") {
+        try {
+            let p = await DeviceOrientationEvent.requestPermission();
+            if (p === "granted") {
+                window.addEventListener("deviceorientation", handleOrientation);
+                btn.style.display = "none";
+            } else {
+                alert("Permission denied. Cant simulate physics.");
             }
-        } else {
-            window.addEventListener("deviceorientation", handleOrientation);
-            usingDeviceOrientation = true;
+        } catch (e) {
+            alert(e);
         }
-        document.getElementById("start").style.display = "none";
-    };
+    } else {
+        // Non-iOS or older devices
+        window.addEventListener("deviceorientation", handleOrientation);
+        btn.style.display = "none";
+    }
+};
 
-    function handleOrientation(e) {
-        if (e.gamma === null) return;
-        let gamma = e.gamma;
-        // Clamp extreme angles
-        if (gamma > 60) gamma = 60;
-        if (gamma < -60) gamma = -60;
-        targetTilt = -gamma * (Math.PI / 180);
+function handleOrientation(e) {
+    // Gamma is usually left/right tilt (-90 to 90)
+    // We clamp it slightly to prevent extreme edge cases
+    let g = e.gamma || 0;
+    if(g > 90) g = 90;
+    if(g < -90) g = -90;
+    
+    // Smooth the input slightly to reduce sensor jitter
+    currentTilt = g;
+}
+
+function physics() {
+    // 1. Calculate Tilt Dynamics
+    // We use Linear Interpolation (Lerp) to smooth the sensor data
+    smoothedTilt += (currentTilt - smoothedTilt) * 0.1;
+    
+    // Calculate the speed of rotation (Angular Velocity)
+    // This is crucial: moving the phone quickly creates momentum
+    let tiltDelta = smoothedTilt - prevTilt;
+    prevTilt = smoothedTilt;
+
+    // Convert angle to a slope factor
+    // tan() gives physically accurate slope for a given angle
+    let slope = Math.tan(smoothedTilt * Math.PI / 180);
+
+    // 2. Apply Forces to each point
+    for (let i = 0; i < POINTS; i++) {
+        // --- A. Target Height Calculation (Gravity) ---
+        // If the cup is tilted, water wants to form a line perpendicular to gravity.
+        // We calculate that ideal line relative to the center of the screen.
+        let distanceFromCenter = (i - POINTS / 2) * (W / POINTS);
+        let targetHeight = baseLevel + (distanceFromCenter * slope);
+
+        // --- B. Spring Force (Gravity Pull) ---
+        // Pull the water towards that ideal line, but with a spring constant (k).
+        let extension = waterH[i] - targetHeight;
+        let force = -SPRING_K * extension;
+
+        // --- C. Inertia (The "Throw" Effect) ---
+        // If the phone rotates quickly, add velocity to the water.
+        // Tilting right throws water to the left (relative to screen coords) and vice versa.
+        // We scale this by distance from center to simulate centrifugal-like effects.
+        let inertiaForce = tiltDelta * INERTIA_SCALE * (i - POINTS/2) / POINTS;
+        
+        // Apply forces to velocity
+        waterV[i] += force - inertiaForce;
+        
+        // --- D. Damping (Friction) ---
+        waterV[i] *= (1 - DAMPING);
+        
+        // Update position
+        waterH[i] += waterV[i];
     }
 
-    // Desktop & Touch Fallback (Drag to tilt the cup)
-    function handleDrag(e) {
-        if (usingDeviceOrientation) return;
-        let clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        let rect = canvas.getBoundingClientRect();
-        let mx = clientX - rect.left - (rect.width / 2);
-        // Map mouse position to a tilt angle
-        targetTilt = -(mx / (rect.width / 2)) * (Math.PI / 3);
-    }
-
-    canvas.addEventListener("mousemove", (e) => { if (e.buttons > 0) handleDrag(e); });
-    canvas.addEventListener("mousedown", handleDrag);
-    canvas.addEventListener("touchmove", handleDrag);
-
-    // --- Physics Engine ---
-
-    function physics() {
-        // Smooth out the tilt application (simulates the inertia of tilting the cup itself)
-        tilt += (targetTilt - tilt) * 0.1;
-        
-        let dx = W / (points - 1);
-        let target_dy = dx * Math.tan(tilt);
-
-        // 1. Calculate Acceleration & Momentum (Shallow Water Equations)
-        for (let i = 0; i < points - 1; i++) {
-            let actual_dy = water[i + 1] - water[i];
-            let force = target_dy - actual_dy;
-            
-            flows[i] += force * 0.04; // Gravity / Acceleration
-            flows[i] *= 0.99;         // Dampening (High = sloshes longer)
-        }
-
-        // 2. Apply flows to update water column heights
-        for (let i = 0; i < points; i++) {
-            let flow_in = (i > 0) ? flows[i - 1] : 0;
-            let flow_out = (i < points - 1) ? flows[i] : 0;
-            
-            water[i] += (flow_in - flow_out) * 0.5; // Time step
-        }
-
-        // 3. Surface Tension / Viscosity (Smooths high-frequency jitter, strictly volume preserving)
-        for (let i = 0; i < points - 1; i++) {
-            let diff = water[i + 1] - water[i];
-            let tension = diff * 0.015;
-            water[i] += tension;
-            water[i + 1] -= tension;
-        }
-
-        // 4. Edge Meniscus (Water crawling up the glass edges slightly)
-        water[0] -= 1.0;
-        water[points - 1] -= 1.0;
-
-        // 5. Strict Volume Conservation (Ensures the cup never magically empties or overfills)
-        let currentArea = 0;
-        for (let i = 0; i < points; i++) currentArea += water[i];
-        
-        let targetArea = baseHeight * points;
-        let areaDiff = (targetArea - currentArea) / points;
-        
-        for (let i = 0; i < points; i++) {
-            water[i] += areaDiff;
+    // 3. Wave Propagation (Spread)
+    // This passes energy between neighbors 
+    // We run this multiple times per frame for stability
+    for(let j = 0; j < 4; j++) {
+        for (let i = 0; i < POINTS; i++) {
+            if (i > 0) {
+                // Pull neighbor towards me
+                let leftDelta = waterH[i] - waterH[i - 1];
+                waterV[i - 1] += leftDelta * SPREAD;
+                waterV[i] -= leftDelta * SPREAD; // Newton's 3rd law
+            }
+            if (i < POINTS - 1) {
+                let rightDelta = waterH[i] - waterH[i + 1];
+                waterV[i + 1] += rightDelta * SPREAD;
+                waterV[i] -= rightDelta * SPREAD;
+            }
         }
     }
+    
+    // 4. Boundary "Splashing"
+    // If water hits the ceiling or floor, bounce it
+    for(let i=0; i<POINTS; i++){
+        if(waterH[i] > H) { waterH[i] = H; waterV[i] *= -0.5; }
+        if(waterH[i] < 0) { waterH[i] = 0; waterV[i] *= -0.5; }
+    }
+}
 
-    // --- Rendering ---
+function draw() {
+    ctx.clearRect(0, 0, W, H);
 
-    function draw() {
-        ctx.clearRect(0, 0, W, H);
+    // Create Gradient for water
+    let grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "rgba(60, 160, 255, 0.8)"); // Top lighter
+    grad.addColorStop(1, "rgba(20, 80, 200, 0.9)");  // Bottom darker
 
-        // Water Path
-        ctx.beginPath();
-        ctx.moveTo(0, H);
-        
-        for (let i = 0; i < points; i++) {
-            let x = i * (W / (points - 1));
-            let y = water[i];
-            ctx.lineTo(x, y);
-        }
-        
-        ctx.lineTo(W, H);
-        ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
 
-        // 1. Main Water Body (Gradient)
-        let grad = ctx.createLinearGradient(0, H * 0.2, 0, H);
-        grad.addColorStop(0, "rgba(77, 166, 255, 0.95)");
-        grad.addColorStop(1, "rgba(10, 80, 180, 0.95)");
-        ctx.fillStyle = grad;
-        ctx.fill();
-
-        // 2. Surface Surface Highlight (Crisp top edge)
-        ctx.beginPath();
-        for (let i = 0; i < points; i++) {
-            let x = i * (W / (points - 1));
-            let y = water[i];
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-        ctx.lineWidth = 2.5;
-        ctx.lineJoin = "round";
-        ctx.stroke();
-
-        // 3. Fake Depth / Refraction Line (Draws slightly below the surface)
-        ctx.beginPath();
-        for (let i = 0; i < points; i++) {
-            let x = i * (W / (points - 1));
-            let y = water[i];
-            if (i === 0) ctx.moveTo(x, y + 5);
-            else ctx.lineTo(x, y + 5);
-        }
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-        ctx.lineWidth = 2;
-        ctx.stroke();
+    // Draw the top surface curve
+    for (let i = 0; i < POINTS; i++) {
+        let x = i * (W / (POINTS - 1));
+        let y = waterH[i];
+        ctx.lineTo(x, y);
     }
 
-    function loop() {
-        physics();
-        draw();
-        requestAnimationFrame(loop);
-    }
+    ctx.lineTo(W, H); // Bottom right
+    ctx.lineTo(0, H); // Bottom left
+    ctx.closePath();
+    ctx.fill();
 
-    // Start simulation
-    loop();
+    // Highlight line on top
+    ctx.beginPath();
+    for (let i = 0; i < POINTS; i++) {
+        let x = i * (W / (POINTS - 1));
+        let y = waterH[i];
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
+function loop() {
+    physics();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
 
 </script>
 

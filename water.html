@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Hyper-Realistic Liquid & Haptics</title>
+    <title>120Hz Reactive Fluid & Haptics</title>
     <style>
         body {
             margin: 0;
@@ -15,16 +15,15 @@
         }
 
         /* 
-         * THE METABALL FLUID RENDERER
-         * This combination of blur and extreme contrast forces the drawn circles 
-         * to visually melt and merge together, creating realistic surface tension and blobs.
+         * UPGRADED METABALL FILTER 
+         * Sharper contrast creates tighter surface tension and distinct, realistic droplets.
          */
         #fluid-layer {
             position: absolute;
             top: 0; left: 0;
             width: 100vw; height: 100vh;
             background-color: #000;
-            filter: blur(12px) contrast(40);
+            filter: blur(10px) contrast(35);
             z-index: 1;
         }
 
@@ -35,18 +34,17 @@
             background-color: transparent;
         }
 
-        /* Simulates looking inside a glass cup with reflections */
+        /* Glass reflections */
         #glass-overlay {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
-            box-shadow: inset 0 0 60px rgba(255, 255, 255, 0.15);
-            background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0) 50%, rgba(255,255,255,0.02) 100%);
+            box-shadow: inset 0 0 70px rgba(255, 255, 255, 0.15);
+            background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(0,0,0,0) 40%, rgba(255,255,255,0.02) 100%);
             border: 2px solid rgba(255,255,255,0.08);
             pointer-events: none;
             z-index: 5;
         }
 
-        /* UI Styling */
         #ui {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -55,13 +53,13 @@
             justify-content: center;
             align-items: center;
             z-index: 10;
-            background: rgba(0,0,0,0.5);
-            backdrop-filter: blur(20px);
-            transition: opacity 0.4s;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(15px);
+            transition: opacity 0.3s;
         }
 
         button {
-            padding: 22px 50px;
+            padding: 20px 45px;
             font-size: 24px;
             font-weight: 800;
             border-radius: 50px;
@@ -75,70 +73,97 @@
         button:active { transform: scale(0.92); }
         
         .hint {
-            margin-top: 24px;
-            color: rgba(255,255,255,0.7);
+            margin-top: 20px;
+            color: rgba(255,255,255,0.8);
             font-size: 15px;
             text-align: center;
-            line-height: 1.5;
-        }
-
-        /* iOS 17+ Haptic Trigger Hack */
-        .ios-haptic-switch {
-            position: absolute;
-            left: -9999px;
-            opacity: 0.01;
+            line-height: 1.6;
         }
     </style>
 </head>
 <body>
 
-<!-- The invisible trigger for iOS Safari Web Haptics -->
-<input type="checkbox" switch id="ios-haptic-hack" class="ios-haptic-switch">
+<!-- Hidden Label & Switch for iOS Haptic Hack -->
+<label id="haptic-label" style="position:absolute; left:-9999px; opacity: 0.01;">
+    <input type="checkbox" switch id="haptic-switch">
+</label>
 
-<!-- The Gooey Fluid Render Layer -->
 <div id="fluid-layer">
     <canvas id="sim"></canvas>
 </div>
-
-<!-- Lighting/Glass overlay -->
 <div id="glass-overlay"></div>
 
 <div id="ui">
     <button id="btn-start">Pour Water</button>
-    <div class="hint">1. Turn OFF Silent Mode<br>2. Turn OFF Portrait Lock</div>
+    <div class="hint">Turn up media volume slightly<br>for Sub-Bass Haptics</div>
 </div>
 
 <script>
     /**
-     * --- CONTINUOUS HAPTICS ENGINE ---
+     * --- DUAL-ENGINE HAPTICS (Audio + Physical) ---
+     * Bypasses iOS Safari's strict vibration blocking.
      */
-    const iosSwitch = document.getElementById('ios-haptic-hack');
+    let audioCtx;
+    const hapticLabel = document.getElementById('haptic-label');
 
-    function fireHapticTick() {
-        if (navigator.vibrate) navigator.vibrate(12);
-        if (iosSwitch) iosSwitch.click(); // Triggers iOS physical Taptic bump
+    function initHaptics() {
+        // Initialize Web Audio API for Sub-Bass vibration
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+        audioCtx.resume();
+        
+        // Initial wake-up bump
+        triggerHaptic('heavy');
+    }
+
+    function triggerHaptic(type = 'light') {
+        // 1. Standard API (Works on Android)
+        if (navigator.vibrate) navigator.vibrate(type === 'heavy' ? 25 : 10);
+        
+        // 2. iOS Native Switch Hack
+        if (hapticLabel) hapticLabel.click();
+
+        // 3. WebAudio Sub-Bass Emitter (Simulates a physical Taptic thump on iOS)
+        if (audioCtx && audioCtx.state === 'running') {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            // 40Hz is deep bass. The speaker diaphragm moves violently, shaking the phone.
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(type === 'heavy' ? 40 : 60, audioCtx.currentTime);
+            
+            // Fast attack/release envelope to sound like a "thud" instead of a "beep"
+            const duration = type === 'heavy' ? 0.05 : 0.015;
+            gain.gain.setValueAtTime(1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+            
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
     }
 
     let lastImpactTime = 0;
     let lastFlowTime = 0;
 
     /**
-     * --- FLUID PHYSICS CONFIGURATION ---
+     * --- 120Hz REACTIVE FLUID ENGINE ---
      */
     const canvas = document.getElementById('sim');
     const ctx = canvas.getContext('2d', { alpha: false });
     const ui = document.getElementById('ui');
     const btn = document.getElementById('btn-start');
 
-    const PARTICLES = 650;      // Optimal density for gooey rendering
-    const R = 8;                // Collision radius
-    const SPACING = R * 2.2;    // Resting distance
+    // Highly optimized density for fast 120Hz calculations
+    const PARTICLES = 550;      
+    const R = 9;                
+    const SPACING = R * 2.2;    
     const SPACING_SQ = SPACING * SPACING;
-    const COHESION_DIST = SPACING * 1.6; // How far water reaches to pull other water
+    const COHESION_DIST = SPACING * 1.5; 
     const COHESION_SQ = COHESION_DIST * COHESION_DIST;
-    
-    // We draw the circles very large so the CSS Blur/Contrast melts them together
-    const DRAW_R = R * 2.8;     
+    const DRAW_R = R * 2.6;     
 
     let width, height;
     let particles = [];
@@ -146,7 +171,6 @@
     let cols, rows;
     let cellSize = COHESION_DIST;
 
-    // Gravity Dynamics
     let targetGravityX = 0;
     let targetGravityY = 0.9;
     let gravityX = 0;
@@ -155,12 +179,9 @@
     class Particle {
         constructor(id, x, y) {
             this.id = id;
-            this.x = x;
-            this.y = y;
-            this.oldX = x;
-            this.oldY = y;
-            this.vx = 0;
-            this.vy = 0;
+            this.x = x; this.y = y;
+            this.oldX = x; this.oldY = y;
+            this.vx = 0; this.vy = 0;
         }
     }
 
@@ -174,9 +195,9 @@
         for(let i = 0; i < grid.length; i++) grid[i] = [];
 
         particles =[];
-        const spawnCols = Math.max(5, Math.floor(width / SPACING) - 4);
+        const spawnCols = Math.max(5, Math.floor(width / SPACING) - 3);
         const startX = (width - (spawnCols * SPACING)) / 2;
-        const startY = 60; // Spawn near the top to see the drop
+        const startY = 80; 
 
         for (let i = 0; i < PARTICLES; i++) {
             let x = startX + (i % spawnCols) * SPACING + (Math.random() - 0.5);
@@ -185,22 +206,20 @@
         }
     }
 
-    window.addEventListener('resize', () => { 
-        if(particles.length > 0) initParticles();
-    });
+    window.addEventListener('resize', () => { if(particles.length > 0) initParticles(); });
 
     /**
-     * --- PHYSICS ENGINE LOOP ---
+     * --- PHYSICS UPDATE LOOP ---
      */
     function updatePhysics() {
-        // Inertia tracking
-        gravityX += (targetGravityX - gravityX) * 0.15;
-        gravityY += (targetGravityY - gravityY) * 0.15;
+        // High reactivity gravity (much faster response to phone tilt)
+        gravityX += (targetGravityX - gravityX) * 0.4;
+        gravityY += (targetGravityY - gravityY) * 0.4;
 
         let totalKineticEnergy = 0;
         let totalWallForce = 0;
 
-        // 1. Integration (Move particles)
+        // 1. Movement & Global Forces
         for (let i = 0; i < PARTICLES; i++) {
             let p = particles[i];
             
@@ -209,14 +228,14 @@
 
             totalKineticEnergy += Math.abs(p.vx) + Math.abs(p.vy);
 
-            // Wake/Sleep Threshold (fixes jittering when resting)
-            if (p.vx * p.vx + p.vy * p.vy < 0.01) {
+            // Tighter Wake/Sleep logic for instant rest
+            if (p.vx * p.vx + p.vy * p.vy < 0.005) {
                 p.vx = 0; p.vy = 0;
                 p.oldX = p.x; p.oldY = p.y;
             }
 
-            p.vx *= 0.999; // Low air resistance
-            p.vy *= 0.999;
+            p.vx *= 0.9995; // Highly slippery glass
+            p.vy *= 0.9995;
             
             p.vx += gravityX;
             p.vy += gravityY;
@@ -233,14 +252,12 @@
             let p = particles[i];
             let cx = Math.floor(p.x / cellSize);
             let cy = Math.floor(p.y / cellSize);
-            
             if (cx < 0) cx = 0; if (cx >= cols) cx = cols - 1;
             if (cy < 0) cy = 0; if (cy >= rows) cy = rows - 1;
-            
             grid[cx + cy * cols].push(p);
         }
 
-        // 3. Fluid Constraints (Cohesion, Repulsion, Viscosity)
+        // 3. Fluid Mechanics (Cohesion + Tighter Viscosity)
         for (let iter = 0; iter < 3; iter++) {
             for (let i = 0; i < PARTICLES; i++) {
                 let p = particles[i];
@@ -264,25 +281,22 @@
                                         let nyDir = dy / dist;
 
                                         if (dist < SPACING) {
-                                            // A. INCOMPRESSIBILITY (Push Apart)
-                                            let overlap = SPACING - dist;
-                                            let push = overlap * 0.45;
-                                            
+                                            // INCOMPRESSIBILITY (Push Apart)
+                                            let push = (SPACING - dist) * 0.48;
                                             p.x -= nxDir * push; p.y -= nyDir * push;
                                             p2.x += nxDir * push; p2.y += nyDir * push;
 
-                                            // B. VISCOSITY (Share momentum)
+                                            // VISCOSITY (Reduces internal jitter)
+                                            let visc = 0.15; 
                                             let vxDiff = (p.x - p.oldX) - (p2.x - p2.oldX);
                                             let vyDiff = (p.y - p.oldY) - (p2.y - p2.oldY);
-                                            let visc = 0.22; 
                                             
                                             p.oldX += vxDiff * visc; p.oldY += vyDiff * visc;
                                             p2.oldX -= vxDiff * visc; p2.oldY -= vyDiff * visc;
                                         } 
                                         else {
-                                            // C. SURFACE TENSION / COHESION (Pull Together)
-                                            // This prevents the "sand" look and forms water blobs
-                                            let pull = (dist - SPACING) * 0.035; 
+                                            // SURFACE TENSION (Pull together into blobs)
+                                            let pull = (dist - SPACING) * 0.04; 
                                             p.x += nxDir * pull; p.y += nyDir * pull;
                                             p2.x -= nxDir * pull; p2.y -= nyDir * pull;
                                         }
@@ -295,48 +309,41 @@
             }
         }
 
-        // 4. Boundary Collisions & Measure Wall Impact
+        // 4. Boundary Engine
         for (let i = 0; i < PARTICLES; i++) {
             let p = particles[i];
-            let bounce = 0.1; // Smooth slide, no bouncy rubber
-
+            
             if (p.x <= R) { 
-                p.x = R; p.oldX = p.x + p.vx * bounce; 
+                p.x = R; p.oldX = p.x; 
                 totalWallForce += Math.abs(p.vx); 
             }
             else if (p.x >= width - R) { 
-                p.x = width - R; p.oldX = p.x + p.vx * bounce; 
+                p.x = width - R; p.oldX = p.x; 
                 totalWallForce += Math.abs(p.vx); 
             }
             
             if (p.y <= R) { 
-                p.y = R; p.oldY = p.y + p.vy * bounce; 
+                p.y = R; p.oldY = p.y; 
                 totalWallForce += Math.abs(p.vy); 
             }
             else if (p.y >= height - R) { 
-                p.y = height - R; 
-                p.oldY = p.y + p.vy * bounce; 
-                p.oldX = p.x - (p.x - p.oldX) * 0.6; // High friction against the bottom
+                p.y = height - R; p.oldY = p.y; 
+                p.oldX = p.x - (p.x - p.oldX) * 0.2; // Slide friction
                 totalWallForce += Math.abs(p.vy); 
             }
         }
 
-        // 5. EMBEDDED HAPTICS LOGIC
+        // 5. EMBEDDED DYNAMIC HAPTICS
         const now = Date.now();
         
-        // A. Heavy Impact (Splash)
-        // Triggered when a large wave hits the walls. Double tick creates a deep "Thud".
-        if (totalWallForce > 350 && (now - lastImpactTime > 180)) {
-            fireHapticTick(); 
-            setTimeout(fireHapticTick, 35); 
+        // Massive Splash
+        if (totalWallForce > 450 && (now - lastImpactTime > 150)) {
+            triggerHaptic('heavy');
             lastImpactTime = now;
         } 
-        
-        // B. Continuous Flowing (Slosh / Slide)
-        // Triggered continuously while the water mass is moving actively.
-        // The 85ms gap creates a continuous "rumbling" feeling in your hands.
-        if (totalKineticEnergy > 2000 && (now - lastFlowTime > 85) && (now - lastImpactTime > 100)) {
-            fireHapticTick();
+        // Flowing / Rolling rumble
+        else if (totalKineticEnergy > 3000 && (now - lastFlowTime > 90) && (now - lastImpactTime > 100)) {
+            triggerHaptic('light');
             lastFlowTime = now;
         }
     }
@@ -345,32 +352,29 @@
      * --- RENDERING ---
      */
     function draw() {
-        // Clear background to absolute black (Required for Contrast filter to work)
         ctx.fillStyle = "#000000"; 
         ctx.fillRect(0, 0, width, height);
 
-        // Draw molecules in a bright blue.
-        // Because of the CSS contrast() and blur() on the parent div, 
-        // these circles will melt together into a solid liquid body!
-        ctx.fillStyle = "#1e90ff"; 
+        // Water color. Melts together perfectly via CSS.
+        ctx.fillStyle = "#0088ff"; 
         ctx.beginPath();
         for (let i = 0; i < PARTICLES; i++) {
             let p = particles[i];
-            // Move cursor so lines don't connect between molecules
             ctx.moveTo(p.x + DRAW_R, p.y); 
             ctx.arc(p.x, p.y, DRAW_R, 0, Math.PI * 2);
         }
         ctx.fill();
     }
 
+    // Fixed 120Hz Timestep for ProMotion iPhones
     let lastTime = 0;
     let accumulator = 0;
-    const TIME_STEP = 1000 / 60;
+    const TIME_STEP = 1000 / 120; // 120 physics calculations per second
 
     function loop(time) {
         let dt = time - lastTime;
         lastTime = time;
-        if (dt > 100) dt = 100;
+        if (dt > 50) dt = 50;
 
         accumulator += dt;
         while (accumulator >= TIME_STEP) {
@@ -383,44 +387,38 @@
     }
 
     /**
-     * --- STARTUP & DEVICE SENSORS ---
+     * --- STARTUP ---
      */
     btn.addEventListener('click', () => {
-        // Synchronously unlock the Haptic engine upon user gesture
-        fireHapticTick(); 
-        setTimeout(fireHapticTick, 50);
+        initHaptics();
 
-        // Handle iOS Permissions
         if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
             DeviceMotionEvent.requestPermission()
-                .then(permissionState => {
-                    if (permissionState === 'granted') {
-                        startSimulation();
-                    } else {
-                        alert('Permission to access device motion was denied.');
-                    }
+                .then(state => {
+                    if (state === 'granted') startSimulation();
+                    else alert('Motion access denied.');
                 })
-                .catch(err => alert('Error requesting motion access: ' + err));
+                .catch(err => alert('Error: ' + err));
         } else {
-            // Non-iOS / Android
             startSimulation();
         }
     });
 
     function startSimulation() {
         ui.style.opacity = "0";
-        setTimeout(() => ui.style.display = "none", 400);
+        setTimeout(() => ui.style.display = "none", 300);
         
         initParticles();
         requestAnimationFrame((t) => { lastTime = t; loop(t); });
 
-        // Map physical accelerometer to canvas gravity
+        // Map sensor directly for extreme reactivity
         window.addEventListener("devicemotion", (e) => {
             let acc = e.accelerationIncludingGravity;
             if (acc) {
-                const weight = 0.28; // Adjust to make the fluid feel heavier or lighter
+                // Increased weight (0.5) makes it fall and splash much harder
+                const weight = 0.5; 
                 targetGravityX = acc.x * weight; 
-                targetGravityY = -acc.y * weight; // iOS Y-axis is inverted relative to canvas
+                targetGravityY = -acc.y * weight; 
             }
         });
     }

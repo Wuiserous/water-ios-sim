@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gyro Water Simulation</title>
+
+<style>
+
+body{
+margin:0;
+background:#111;
+display:flex;
+justify-content:center;
+align-items:center;
+height:100vh;
+font-family:sans-serif;
+}
+
+#container{
+position:relative;
+}
+
+canvas{
+background:#1b1b1b;
+border-radius:20px;
+}
+
+button{
+position:absolute;
+top:50%;
+left:50%;
+transform:translate(-50%,-50%);
+padding:14px 22px;
+font-size:16px;
+border:none;
+border-radius:10px;
+background:#4da6ff;
+color:white;
+cursor:pointer;
+}
+
+</style>
+</head>
+<body>
+
+<div id="container">
+<canvas id="c" width="350" height="500"></canvas>
+<button id="start">Enable Motion</button>
+</div>
+
+<script>
+
+const canvas = document.getElementById("c")
+const ctx = canvas.getContext("2d")
+
+const W = canvas.width
+const H = canvas.height
+
+const points = 60
+let water = []
+let velocity = []
+
+for(let i=0;i<points;i++){
+water[i] = H*0.55
+velocity[i] = 0
+}
+
+let tilt = 0
+let targetTilt = 0
+
+document.getElementById("start").onclick = async () => {
+
+if(typeof DeviceOrientationEvent.requestPermission === "function"){
+
+let p = await DeviceOrientationEvent.requestPermission()
+
+if(p === "granted"){
+window.addEventListener("deviceorientation",handle)
+document.getElementById("start").style.display="none"
+}
+
+}else{
+
+window.addEventListener("deviceorientation",handle)
+document.getElementById("start").style.display="none"
+
+}
+
+}
+
+function handle(e){
+
+targetTilt = e.gamma / 30
+
+}
+
+function physics(){
+
+tilt += (targetTilt - tilt) * 0.08
+
+for(let i=0;i<points;i++){
+
+let slope = tilt * (i - points/2)
+
+let target = H*0.55 + slope
+
+let force = (target - water[i]) * 0.02
+
+velocity[i] += force
+velocity[i] *= 0.96
+
+}
+
+for(let i=0;i<points;i++){
+water[i] += velocity[i]
+}
+
+for(let i=1;i<points;i++){
+
+let spread = 0.25 * (water[i] - water[i-1])
+
+velocity[i] -= spread
+velocity[i-1] += spread
+
+}
+
+for(let i=points-2;i>=0;i--){
+
+let spread = 0.25 * (water[i] - water[i+1])
+
+velocity[i] -= spread
+velocity[i+1] += spread
+
+}
+
+}
+
+function draw(){
+
+ctx.clearRect(0,0,W,H)
+
+ctx.fillStyle="#333"
+ctx.fillRect(0,0,W,H)
+
+ctx.beginPath()
+
+ctx.moveTo(0,H)
+
+for(let i=0;i<points;i++){
+
+let x = i*(W/(points-1))
+let y = water[i]
+
+ctx.lineTo(x,y)
+
+}
+
+ctx.lineTo(W,H)
+ctx.closePath()
+
+ctx.fillStyle="#3aa7ff"
+ctx.fill()
+
+ctx.beginPath()
+
+for(let i=0;i<points;i++){
+
+let x = i*(W/(points-1))
+let y = water[i]
+
+if(i===0) ctx.moveTo(x,y)
+else ctx.lineTo(x,y)
+
+}
+
+ctx.strokeStyle="rgba(255,255,255,0.5)"
+ctx.lineWidth=2
+ctx.stroke()
+
+}
+
+function loop(){
+
+physics()
+draw()
+
+requestAnimationFrame(loop)
+
+}
+
+loop()
+
+</script>
+
+</body>
+</html>
